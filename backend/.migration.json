@@ -1,0 +1,9 @@
+{
+  "migrations-dir": "migrations",
+  "migrations-table": "pgmigrations",
+  "schema": "public",
+  "dir": "migrations",
+  "checkOrder": true,
+  "ignorePattern": "\\..*",
+  "verbose": true
+}

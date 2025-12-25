@@ -1,0 +1,31 @@
+{
+  "name": "hustlehub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Location-based micro-task and wallet platform - MVP",
+  "workspaces": [
+    "backend",
+    "mobile",
+    "admin",
+    "shared"
+  ],
+  "scripts": {
+    "backend": "npm run dev --workspace=backend",
+    "mobile": "npm run start --workspace=mobile",
+    "admin": "npm run start --workspace=admin",
+    "db:migrate": "npm run migrate --workspace=backend",
+    "db:seed": "npm run seed --workspace=backend"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "keywords": [
+    "gig-economy",
+    "micro-tasks",
+    "wallet",
+    "location-based"
+  ],
+  "author": "",
+  "license": "UNLICENSED"
+}
