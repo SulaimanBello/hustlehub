@@ -8,6 +8,7 @@ import authRoutes from './routes/auth.routes';
 import taskRoutes from './routes/task.routes';
 import walletRoutes from './routes/wallet.routes';
 import paymentRoutes from './routes/payment.routes';
+import adminRoutes from './routes/admin.routes';
 
 // Create Express app
 const app: Application = express();
@@ -53,6 +54,7 @@ app.use(`/api/${config.apiVersion}/auth`, authRoutes);
 app.use(`/api/${config.apiVersion}/tasks`, taskRoutes);
 app.use(`/api/${config.apiVersion}/wallet`, walletRoutes);
 app.use(`/api/${config.apiVersion}/payments`, paymentRoutes);
+app.use(`/api/${config.apiVersion}/admin`, adminRoutes);
 
 // 404 handler
 app.use(notFoundHandler);
