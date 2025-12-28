@@ -1,0 +1,28 @@
+# Development Dockerfile for HustleHub Admin Dashboard
+# Optimized for hot-reload with Vite
+
+FROM node:18-alpine
+
+# Install dumb-init for proper signal handling
+RUN apk add --no-cache dumb-init
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install all dependencies
+RUN npm install
+
+# Copy source code (will be overridden by volume mount in docker-compose)
+COPY . .
+
+# Expose Vite dev server port
+EXPOSE 3001
+
+# Use dumb-init to handle signals properly
+ENTRYPOINT ["dumb-init", "--"]
+
+# Start Vite dev server with host binding for Docker
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

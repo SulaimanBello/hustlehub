@@ -1,0 +1,80 @@
+# Root .dockerignore for HustleHub
+# Used when building from project root
+
+# Dependencies
+node_modules/
+**/node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+**/package-lock.json
+
+# Environment files
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Documentation
+README.md
+*.md
+docs/
+
+# Docker files (don't copy into images)
+Dockerfile*
+**/Dockerfile*
+.dockerignore
+**/.dockerignore
+docker-compose*.yml
+
+# Build outputs
+dist/
+build/
+**/dist/
+**/build/
+*.tsbuildinfo
+
+# Testing
+coverage/
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+__tests__/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Mobile specific
+mobile/android/
+mobile/ios/
+mobile/.expo/
+mobile/node_modules/
+
+# Misc
+.editorconfig
+.prettierrc
+.eslintrc*
+tsconfig.json

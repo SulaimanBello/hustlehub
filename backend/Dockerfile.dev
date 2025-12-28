@@ -1,0 +1,28 @@
+# Development Dockerfile for HustleHub Backend
+# Optimized for hot-reload and development workflow
+
+FROM node:18-alpine
+
+# Install dumb-init for proper signal handling
+RUN apk add --no-cache dumb-init
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install all dependencies (including devDependencies)
+RUN npm install
+
+# Copy source code (will be overridden by volume mount in docker-compose)
+COPY . .
+
+# Expose port
+EXPOSE 5000
+
+# Use dumb-init to handle signals properly
+ENTRYPOINT ["dumb-init", "--"]
+
+# Start with nodemon for hot-reload
+CMD ["npm", "run", "dev"]
