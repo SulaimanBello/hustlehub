@@ -6,6 +6,12 @@ import {
   requestWithdrawal,
 } from '../controllers/wallet.controller';
 import { authenticateToken } from '../middleware/auth';
+import {
+  validate,
+  validateQuery,
+  WithdrawalRequestSchema,
+  TransactionQuerySchema,
+} from '../middleware/validation';
 
 const router = Router();
 
@@ -14,7 +20,7 @@ router.use(authenticateToken);
 
 router.get('/', getWallet);
 router.get('/balance', getBalance);
-router.get('/transactions', getTransactions);
-router.post('/withdraw', requestWithdrawal);
+router.get('/transactions', validateQuery(TransactionQuerySchema), getTransactions);
+router.post('/withdraw', validate(WithdrawalRequestSchema), requestWithdrawal);
 
 export default router;

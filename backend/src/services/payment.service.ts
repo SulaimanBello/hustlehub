@@ -144,8 +144,7 @@ class FlutterwaveService {
    */
   verifyWebhookSignature(payload: string, signature: string): boolean {
     if (!config.flutterwave.webhookSecret) {
-      console.warn('⚠️ Webhook secret not configured, skipping verification');
-      return true; // Allow in development
+      throw new Error('Webhook secret not configured - cannot verify webhook authenticity');
     }
 
     const hash = crypto
@@ -171,33 +170,50 @@ export const PaymentService = {
     taskId: string,
     posterId: string,
     amount: number
-  ): Promise<{ payment_link: string; transaction_id: string }> {
-    // Get poster's wallet
+  ): Promise<{ payment_link: string; transaction_id: string; tx_ref: string }> {
+    // Get poster's wallet and user details
     const wallet = await WalletModel.findByUserId(posterId);
 
     if (!wallet) {
       throw new Error('Wallet not found');
     }
 
-    // Create pending transaction record
+    // Get poster details for payment initialization
+    const { UserModel } = await import('../models');
+    const poster = await UserModel.findById(posterId);
+
+    if (!poster) {
+      throw new Error('User not found');
+    }
+
+    // Initialize Flutterwave payment
+    const payment = await flutterwaveService.initializeTaskPayment(
+      taskId,
+      amount,
+      poster.phone_number,
+      poster.name || 'HustleHub User'
+    );
+
+    // Create pending transaction record with Flutterwave reference
     const transaction = await TransactionModel.create({
       wallet_id: wallet.id,
       task_id: taskId,
       type: TransactionType.ESCROW_HOLD,
       amount,
       status: TransactionStatus.PENDING,
+      metadata: {
+        tx_ref: payment.tx_ref,
+        payment_link: payment.payment_link,
+      },
     });
 
-    // TODO: Initialize Flutterwave payment
-    // For MVP, we'll simulate this
-    // In production:
-    // const payment = await flutterwaveService.initializeTaskPayment(...);
-
-    console.log(`💰 Escrow hold created for task ${taskId}: ${amount}`);
+    console.log(`💰 Escrow payment initialized for task ${taskId}: ${amount} NGN`);
+    console.log(`🔗 Payment link: ${payment.payment_link}`);
 
     return {
-      payment_link: 'https://example.com/payment', // Would be real Flutterwave link
+      payment_link: payment.payment_link,
       transaction_id: transaction.id,
+      tx_ref: payment.tx_ref,
     };
   },
 
@@ -246,6 +262,8 @@ export const PaymentService = {
     }
 
     // Create escrow release transaction for doer
+    // This credits the doer's wallet balance (internal ledger)
+    // Actual bank transfer happens when doer requests withdrawal
     const releaseTransaction = await TransactionModel.create({
       wallet_id: doerWallet.id,
       task_id: taskId,
@@ -255,12 +273,9 @@ export const PaymentService = {
       status: TransactionStatus.PENDING,
     });
 
-    // TODO: Initiate Flutterwave transfer to doer
-    // For MVP, mark as completed immediately
-    // In production:
-    // await flutterwaveService.initiateTransfer(...);
-
-    // Mark transaction as completed (this will trigger wallet balance update)
+    // Mark transaction as completed (this will trigger wallet balance update via DB trigger)
+    // No Flutterwave transfer needed here - money is held in platform account
+    // Transfer happens when user withdraws via processWithdrawal()
     await TransactionModel.updateStatus(releaseTransaction.id, TransactionStatus.COMPLETED);
 
     // Mark task as paid
@@ -333,14 +348,179 @@ export const PaymentService = {
   async handleTransferCompleted(data: any): Promise<void> {
     const { reference, status } = data;
 
-    if (status !== 'successful') {
-      console.warn('⚠️ Transfer not successful:', status);
+    // Extract transaction ID from reference (format: withdrawal_{transactionId}_{timestamp})
+    const txIdMatch = reference.match(/^withdrawal_([a-f0-9-]+)_/);
+
+    if (!txIdMatch) {
+      console.error('❌ Invalid withdrawal reference format:', reference);
       return;
     }
 
-    // Find transaction by reference
-    // Update status based on webhook confirmation
+    const transactionId = txIdMatch[1];
+    const transaction = await TransactionModel.findById(transactionId);
 
-    console.log(`✅ Transfer completed: ${reference}`);
+    if (!transaction) {
+      console.error('❌ Transaction not found:', transactionId);
+      return;
+    }
+
+    if (transaction.type !== TransactionType.WITHDRAWAL) {
+      console.error('❌ Transaction is not a withdrawal:', transactionId);
+      return;
+    }
+
+    if (status !== 'successful') {
+      console.warn('⚠️ Transfer not successful:', status);
+      await TransactionModel.updateStatus(transactionId, TransactionStatus.FAILED);
+      console.error(`❌ Withdrawal failed: ${reference}`);
+      return;
+    }
+
+    // Mark withdrawal as completed (this will trigger wallet balance update)
+    await TransactionModel.updateStatus(transactionId, TransactionStatus.COMPLETED, data.id?.toString());
+    console.log(`✅ Withdrawal completed: ${reference} (${transaction.amount} NGN)`);
+  },
+
+  /**
+   * Refund escrow payment when task is cancelled
+   * Only possible if task hasn't been accepted yet
+   */
+  async refundEscrowPayment(taskId: string): Promise<void> {
+    const task = await TaskModel.findById(taskId);
+
+    if (!task) {
+      throw new Error('Task not found');
+    }
+
+    if (task.status !== TaskStatus.CANCELLED) {
+      throw new Error('Task must be in CANCELLED status for refund');
+    }
+
+    // Find the escrow hold transaction
+    const transactions = await TransactionModel.findByTask(taskId);
+    const escrowTransaction = transactions.find(
+      (t) => t.type === TransactionType.ESCROW_HOLD
+    );
+
+    if (!escrowTransaction) {
+      console.warn(`⚠️ No escrow transaction found for cancelled task ${taskId}`);
+      return;
+    }
+
+    if (escrowTransaction.status === TransactionStatus.PENDING) {
+      // Payment was never completed, just mark as failed
+      await TransactionModel.updateStatus(escrowTransaction.id, TransactionStatus.FAILED);
+      console.log(`📋 Escrow payment marked as failed for cancelled task ${taskId}`);
+    } else if (escrowTransaction.status === TransactionStatus.COMPLETED) {
+      // Payment was completed, would need to process refund via Flutterwave
+      // For MVP, we can credit the wallet back
+      const wallet = await WalletModel.findByUserId(task.poster_id);
+
+      if (wallet) {
+        // Create a refund transaction (effectively cancels out the escrow hold)
+        await TransactionModel.create({
+          wallet_id: wallet.id,
+          task_id: taskId,
+          type: TransactionType.ESCROW_RELEASE,
+          amount: task.fee_amount,
+          status: TransactionStatus.COMPLETED,
+          metadata: {
+            refund: true,
+            original_transaction: escrowTransaction.id,
+          },
+        });
+
+        console.log(`💵 Refund processed for cancelled task ${taskId}: ${task.fee_amount} NGN`);
+      }
+    }
+  },
+
+  /**
+   * Process pending withdrawal
+   * Called by admin or automated process to transfer funds
+   */
+  async processWithdrawal(transactionId: string): Promise<void> {
+    const transaction = await TransactionModel.findById(transactionId);
+
+    if (!transaction) {
+      throw new Error('Transaction not found');
+    }
+
+    if (transaction.type !== TransactionType.WITHDRAWAL) {
+      throw new Error('Transaction is not a withdrawal');
+    }
+
+    if (transaction.status !== TransactionStatus.PENDING) {
+      throw new Error(`Transaction is not pending (current status: ${transaction.status})`);
+    }
+
+    // Get wallet to verify balance
+    const wallet = await WalletModel.findById(transaction.wallet_id);
+
+    if (!wallet) {
+      throw new Error('Wallet not found');
+    }
+
+    // Verify sufficient balance (withdrawal amount is stored as negative)
+    const withdrawalAmount = Math.abs(transaction.amount);
+    if (wallet.balance < withdrawalAmount) {
+      await TransactionModel.updateStatus(transactionId, TransactionStatus.FAILED);
+      throw new Error('Insufficient balance for withdrawal');
+    }
+
+    // Get bank account details from metadata
+    const { account_number, bank_code } = transaction.metadata || {};
+
+    if (!account_number || !bank_code) {
+      throw new Error('Missing bank account details in transaction metadata');
+    }
+
+    // Get user details for beneficiary name
+    const { UserModel } = await import('../models');
+    const user = await UserModel.findById(wallet.user_id);
+
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    // Generate unique reference for this withdrawal
+    const reference = `withdrawal_${transactionId}_${Date.now()}`;
+
+    try {
+      // Initiate Flutterwave transfer
+      const transferId = await flutterwaveService.initiateTransfer(
+        account_number,
+        bank_code,
+        withdrawalAmount,
+        reference,
+        `HustleHub withdrawal for ${user.phone_number}`,
+        user.name || 'HustleHub User'
+      );
+
+      // Update transaction with Flutterwave reference
+      await TransactionModel.updateStatus(
+        transactionId,
+        TransactionStatus.PENDING, // Keep as PENDING until webhook confirms
+        transferId
+      );
+
+      // Store reference in metadata for webhook matching
+      const updatedMetadata = {
+        ...transaction.metadata,
+        withdrawal_reference: reference,
+        flutterwave_transfer_id: transferId,
+      };
+
+      // Note: We'd need to add a method to update metadata
+      // For now, this will be handled by the webhook
+
+      console.log(`💸 Withdrawal transfer initiated: ${withdrawalAmount} NGN to ${account_number}`);
+      console.log(`🔗 Flutterwave transfer ID: ${transferId}`);
+    } catch (error: any) {
+      // Mark transaction as failed
+      await TransactionModel.updateStatus(transactionId, TransactionStatus.FAILED);
+      console.error(`❌ Withdrawal failed:`, error.message);
+      throw error;
+    }
   },
 };

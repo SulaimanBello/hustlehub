@@ -11,15 +11,21 @@ import {
   cancelTask,
 } from '../controllers/task.controller';
 import { authenticateToken, optionalAuth } from '../middleware/auth';
+import {
+  validate,
+  validateQuery,
+  CreateTaskSchema,
+  NearbyTasksQuerySchema,
+} from '../middleware/validation';
 
 const router = Router();
 
 // Public routes (with optional auth for personalization)
-router.get('/nearby', optionalAuth, getNearbyTasks);
+router.get('/nearby', optionalAuth, validateQuery(NearbyTasksQuerySchema), getNearbyTasks);
 router.get('/:id', optionalAuth, getTaskById);
 
 // Protected routes (require authentication)
-router.post('/', authenticateToken, createTask);
+router.post('/', authenticateToken, validate(CreateTaskSchema), createTask);
 router.get('/my/posted', authenticateToken, getMyPostedTasks);
 router.get('/my/accepted', authenticateToken, getMyAcceptedTasks);
 router.post('/:id/accept', authenticateToken, acceptTask);

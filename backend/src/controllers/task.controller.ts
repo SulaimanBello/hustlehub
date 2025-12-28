@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { TaskModel } from '../models';
 import { AppError, CreateTaskRequest, NearbyTasksQuery, TaskStatus } from '../types';
 import { asyncHandler } from '../middleware/errorHandler';
+import config from '../config';
 
 /**
  * POST /tasks
@@ -41,14 +42,26 @@ export const createTask = asyncHandler(async (req: Request, res: Response) => {
 
   console.log('✨ Task created:', task.id);
 
-  // TODO: Initiate Flutterwave escrow payment
-  // For MVP, we'll assume payment is handled separately
-  // In production, task creation would trigger payment flow
+  // Initiate Flutterwave escrow payment
+  const { PaymentService } = await import('../services/payment.service');
+  const payment = await PaymentService.createEscrowHold(
+    task.id,
+    req.user.userId,
+    fee_amount
+  );
 
   res.status(201).json({
     success: true,
-    message: 'Task created successfully',
-    data: task,
+    message: 'Task created successfully. Please complete payment to activate.',
+    data: {
+      task,
+      payment: {
+        payment_link: payment.payment_link,
+        transaction_id: payment.transaction_id,
+        amount: fee_amount,
+        currency: 'NGN',
+      },
+    },
   });
 });
 
@@ -178,8 +191,16 @@ export const acceptTask = asyncHandler(async (req: Request, res: Response) => {
 
   console.log(`📌 Task ${id} accepted by ${req.user.userId}`);
 
-  // TODO: Emit Socket.IO event to notify poster
-  // io.to(task.poster_id).emit('task_updated', acceptedTask);
+  // Emit Socket.IO event to notify participants
+  const io = req.app.get('io');
+  if (io) {
+    io.to(`task_${id}`).emit('task_updated', {
+      task_id: id,
+      status: acceptedTask.status,
+      doer_id: acceptedTask.doer_id,
+      message: 'Task has been accepted',
+    });
+  }
 
   res.status(200).json({
     success: true,
@@ -222,8 +243,16 @@ export const completeTask = asyncHandler(async (req: Request, res: Response) => 
 
   console.log(`✅ Task ${id} marked as completed`);
 
-  // TODO: Notify poster to confirm completion
-  // io.to(task.poster_id).emit('task_completed', completedTask);
+  // Emit Socket.IO event to notify poster
+  const io = req.app.get('io');
+  if (io) {
+    io.to(`task_${id}`).emit('task_updated', {
+      task_id: id,
+      status: completedTask.status,
+      message: 'Task has been marked as completed',
+      action_required: 'poster_confirmation',
+    });
+  }
 
   res.status(200).json({
     success: true,
@@ -258,22 +287,40 @@ export const confirmCompletion = asyncHandler(async (req: Request, res: Response
     throw new AppError(400, 'Task is not in completed state');
   }
 
-  // TODO: Release payment via Flutterwave
-  // 1. Deduct platform fee
-  // 2. Transfer to doer's wallet
-  // 3. Record transactions
-  // This will be implemented in the payment service
+  // Release escrow payment to doer
+  const { PaymentService } = await import('../services/payment.service');
+  await PaymentService.releaseEscrowPayment(id);
 
-  const paidTask = await TaskModel.markPaid(id);
+  // Task status is updated to PAID within releaseEscrowPayment
+  const paidTask = await TaskModel.findById(id);
 
-  if (!paidTask) {
-    throw new AppError(400, 'Failed to process payment');
+  if (!paidTask || paidTask.status !== TaskStatus.PAID) {
+    throw new AppError(500, 'Failed to process payment');
   }
 
   console.log(`💰 Task ${id} payment released`);
 
-  // TODO: Notify doer of payment
-  // io.to(task.doer_id).emit('payment_received', { task_id: id, amount: ... });
+  // Emit Socket.IO event to notify doer of payment
+  const io = req.app.get('io');
+  if (io && paidTask) {
+    const platformFeePercent = config.business.platformFeePercent;
+    const platformFee = (paidTask.fee_amount * platformFeePercent) / 100;
+    const doerAmount = paidTask.fee_amount - platformFee;
+
+    io.to(`task_${id}`).emit('task_updated', {
+      task_id: id,
+      status: paidTask.status,
+      message: 'Payment has been released',
+    });
+
+    io.to(`task_${id}`).emit('payment_received', {
+      task_id: id,
+      amount: doerAmount,
+      platform_fee: platformFee,
+      total_amount: paidTask.fee_amount,
+      currency: 'NGN',
+    });
+  }
 
   res.status(200).json({
     success: true,
@@ -316,11 +363,13 @@ export const cancelTask = asyncHandler(async (req: Request, res: Response) => {
 
   console.log(`❌ Task ${id} cancelled`);
 
-  // TODO: Refund escrow payment
+  // Refund escrow payment if it was paid
+  const { PaymentService } = await import('../services/payment.service');
+  await PaymentService.refundEscrowPayment(id);
 
   res.status(200).json({
     success: true,
-    message: 'Task cancelled successfully',
+    message: 'Task cancelled successfully. Refund processed if payment was completed.',
     data: cancelledTask,
   });
 });

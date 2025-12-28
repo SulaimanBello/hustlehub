@@ -39,7 +39,7 @@ const limiter = rateLimit({
 app.use(`/api/${config.apiVersion}`, limiter);
 
 // Health check endpoint
-app.get('/health', (req, res) => {
+app.get('/health', (_req, res) => {
   res.json({
     success: true,
     timestamp: new Date().toISOString(),
